@@ -4,7 +4,6 @@ const { Pool } = require('pg');
 
 const app = express();
 app.use(express.json({ limit: '64kb' }));
-app.use(express.urlencoded({ extended: false }));
 
 const PORT = process.env.PORT || 10000;
 const APP_ID = process.env.APP_ID || 'external.com';
@@ -76,7 +75,7 @@ async function validateLicense({ licenseKey, device, packageId, appId }) {
 app.get('/', (_req, res) => res.json({ ok: true, service: 'External Auth', protocol: 'external-license-v1' }));
 app.get('/health', async (_req,res) => { try { await pool.query('SELECT 1'); res.json({ok:true}); } catch(e) { res.status(503).json({ok:false}); } });
 
-app.post('/external/api/server.php', async (req, res) => {
+const licenseHandler = async (req, res) => {
   try {
     const body = req.body || {};
     const timestamp = Number(body.timestamp);
@@ -128,7 +127,10 @@ app.post('/external/api/server.php', async (req, res) => {
       return res.status(400).json({ data: '', timestamp: String(timestamp) });
     }
   }
-});
+};
+
+app.post('/external/api/server.php', licenseHandler);
+app.post('/a1234567', licenseHandler);
 
 function admin(req,res,next){
   if (!ADMIN_TOKEN || req.get('authorization') !== `Bearer ${ADMIN_TOKEN}`) return res.status(401).json({error:'unauthorized'});
@@ -153,28 +155,34 @@ app.get('/admin/licenses', admin, async (_req,res)=>{ const r=await pool.query('
 // and is sent as a Bearer token to the protected admin API. No license data is exposed
 // until the correct token is supplied.
 app.get('/admin', (_req,res)=>{
-  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>External Auth</title><style>body{font-family:system-ui;max-width:700px;margin:40px auto;padding:20px}input,button{font-size:16px;padding:12px;margin:6px 0}input{width:100%;box-sizing:border-box}button{cursor:pointer;width:100%}.key{font-size:24px;font-weight:700;word-break:break-all;padding:18px;background:#eee;margin-top:20px}</style></head><body><h1>External Auth</h1><p>Generate a 30-day key.</p><form method="POST" action="/admin/generate-key"><input name="admin_token" type="password" placeholder="ADMIN_TOKEN" required><button type="submit">Generate 30-day key</button></form><p>La generación usa un formulario HTML normal, sin JavaScript.</p></body></html>`);
+  res.type('html').send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>External Auth — License Manager</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:1000px;margin:30px auto;padding:0 16px;background:#f5f5f7;color:#111}main{background:#fff;border-radius:14px;padding:22px;box-shadow:0 2px 14px #0001}h1{margin-top:0}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}input{padding:10px;border:1px solid #ccc;border-radius:8px;min-width:260px}button{padding:10px 14px;border:0;border-radius:8px;cursor:pointer;font-weight:600}#generate{background:#111;color:#fff}.msg{margin:14px 0;padding:10px;border-radius:8px;background:#f0f0f2;white-space:pre-wrap}.key{font-size:22px;font-weight:700;letter-spacing:1px;padding:16px;background:#eef7ee;border:1px solid #b9d8b9;border-radius:10px;margin:14px 0;word-break:break-all}table{width:100%;border-collapse:collapse;margin-top:18px;font-size:14px}th,td{padding:9px;border-bottom:1px solid #eee;text-align:left}code{background:#eee;padding:3px 6px;border-radius:5px}.muted{color:#666;font-size:13px}</style></head>
+<body><main><h1>External Auth — License Manager</h1><p class="muted">Generate 30-day license keys and manage existing licenses.</p>
+<form method="POST" action="/admin/generate-key">
+<div class="row"><input name="admin_token" type="password" placeholder="ADMIN_TOKEN" autocomplete="off" required><button id="generate" type="submit">Generate 30-day key</button></div>
+</form>
+<div class="msg">This version uses a normal HTML POST and does not depend on browser JavaScript.</div>
+</main></body></html>`);
 });
 
-function adminForm(req,res,next){
-  const token=String(req.body?.admin_token||'');
-  if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) return res.status(401).send('<h1>Unauthorized</h1><p>ADMIN_TOKEN incorrecto.</p>');
-  next();
-}
-
-app.post('/admin/generate-key', adminForm, async (_req,res)=>{
+app.post('/admin/generate-key', async (req,res)=>{
+  const supplied = String(req.body.admin_token || '').trim();
+  const bearer = req.get('authorization');
+  if (!ADMIN_TOKEN || (supplied !== ADMIN_TOKEN && bearer !== `Bearer ${ADMIN_TOKEN}`)) {
+    return res.status(401).type('html').send('<h1>Unauthorized</h1><p>Invalid ADMIN_TOKEN.</p>');
+  }
   try {
-    const raw = crypto.randomBytes(10).toString('hex').toUpperCase();
+    const bytes = crypto.randomBytes(10);
+    const raw = bytes.toString('hex').toUpperCase();
     const key = `EXT-${raw.slice(0,5)}-${raw.slice(5,10)}-${raw.slice(10,15)}-${raw.slice(15,20)}`;
     const expires = Math.floor(Date.now()/1000) + 30 * 86400;
     await pool.query(`INSERT INTO licenses(license_key,package_id,app_id,expires_unix) VALUES($1,$2,$3,$4)`, [key, PACKAGE_ID, APP_ID, expires]);
-    res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Key generated</title><style>body{font-family:system-ui;max-width:700px;margin:40px auto;padding:20px}.key{font-size:25px;font-weight:700;word-break:break-all;padding:20px;background:#eee;border-radius:10px}a{display:inline-block;margin-top:20px}</style></head><body><h1>Key generated</h1><div class="key">${key}</div><p>Expires: ${new Date(expires*1000).toLocaleString()}</p><a href="/admin">Generate another key</a></body></html>`);
+    res.json({ok:true, license_key:key, days:30, expires_unix:expires});
   } catch(e) {
-    console.error('generate-key error:', e);
-    res.status(500).send(`<h1>Error generating key</h1><pre>${String(e.message||e)}</pre><a href="/admin">Back</a>`);
+    console.error(e);
+    res.status(500).json({error:'could_not_generate_key'});
   }
 });
-
-
 
 initDb().then(()=>app.listen(PORT,()=>console.log(`External Auth listening on ${PORT}`))).catch(e=>{ console.error(e); process.exit(1); });

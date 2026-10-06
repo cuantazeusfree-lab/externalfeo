@@ -1,33 +1,36 @@
-# External Auth compatible server
+# External Auth Server
 
-Base URL intended for the IPA:
+Express + PostgreSQL backend compatible with the External license/auth protocol.
 
-`https://externalfeo.onrender.com`
+## Render
 
-License endpoint:
+Set these environment variables:
+
+- `DATABASE_URL` = Render PostgreSQL Internal Database URL
+- `ADMIN_TOKEN` = a secret token used for license administration
+- `CRYPT_SECRET` = `Fluck2020@Zexis`
+- `WIRE_SECRET` = `@IamGayBecauseYouAreSexy`
+- `APP_ID` = `external.com`
+- `PACKAGE_ID` = `External`
+- `MAX_CLOCK_SKEW` = `300`
+
+The existing client endpoint remains:
 
 `POST /external/api/server.php`
 
-Admin API uses `Authorization: Bearer $ADMIN_TOKEN`.
+## License management
 
-## Render setup
+Open:
 
-1. Create a PostgreSQL database on Render.
-2. Create the web service from this directory/repository.
-3. Set `DATABASE_URL` to the Postgres internal/external connection string.
-4. Set a strong random `ADMIN_TOKEN`.
-5. Deploy.
+`https://externalfeo.onrender.com/admin`
 
-The app creates the `licenses` table automatically.
+Enter the same `ADMIN_TOKEN` configured in Render.
 
-## Create a license
+The panel can:
 
-`POST /admin/licenses`
+- Generate a new random key valid for exactly 30 days.
+- List existing licenses.
+- Unbind a license from its device.
+- Ban a license.
 
-JSON:
-
-`{"license_key":"EXT-ABC-123","days":30}`
-
-## Operational notes
-
-The server intentionally preserves the protocol used by the supplied IPA: encrypted JSON payloads, rolling XOR key derivation, status strings, package/app checks, device binding and expiration.
+The license API and authentication protocol are unchanged.

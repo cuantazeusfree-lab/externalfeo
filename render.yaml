@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: externalfeo
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: CRYPT_SECRET
+        value: Fluck2020@Zexis
+      - key: WIRE_SECRET
+        value: '@IamGayBecauseYouAreSexy'
+      - key: APP_ID
+        value: external.com
+      - key: PACKAGE_ID
+        value: External
+      - key: MAX_CLOCK_SKEW
+        value: '300'

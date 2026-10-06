@@ -3,7 +3,9 @@ const crypto = require('crypto');
 const { Pool } = require('pg');
 
 const app = express();
+// Accept both JSON API requests and the x-www-form-urlencoded body used by /admin/generate-key.
 app.use(express.json({ limit: '64kb' }));
+app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 
 const PORT = process.env.PORT || 10000;
 const APP_ID = process.env.APP_ID || 'external.com';
@@ -133,7 +135,8 @@ app.post('/external/api/server.php', licenseHandler);
 app.post('/a1234567', licenseHandler);
 
 function admin(req,res,next){
-  if (!ADMIN_TOKEN || req.get('authorization') !== `Bearer ${ADMIN_TOKEN}`) return res.status(401).json({error:'unauthorized'});
+  const authorization = String(req.get('authorization') || '').trim();
+  if (!ADMIN_TOKEN || authorization !== `Bearer ${ADMIN_TOKEN}`) return res.status(401).json({error:'unauthorized'});
   next();
 }
 app.post('/admin/licenses', admin, async (req,res)=>{
@@ -168,7 +171,7 @@ app.get('/admin', (_req,res)=>{
 
 app.post('/admin/generate-key', async (req,res)=>{
   const supplied = String(req.body.admin_token || '').trim();
-  const bearer = req.get('authorization');
+  const bearer = String(req.get('authorization') || '').trim();
   if (!ADMIN_TOKEN || (supplied !== ADMIN_TOKEN && bearer !== `Bearer ${ADMIN_TOKEN}`)) {
     return res.status(401).type('html').send('<h1>Unauthorized</h1><p>Invalid ADMIN_TOKEN.</p>');
   }

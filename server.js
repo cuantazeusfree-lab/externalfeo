@@ -45,6 +45,12 @@ function authError(code) { return { var: 'momo', error: code, reason: code, seco
 function success(expiresUnix, secondsLeft, reason='ok') { return { var: 'momo', reason, seconds_left: Math.max(0, Math.floor(secondsLeft)), expires_unix: Math.floor(expiresUnix), timestamp: Math.floor(Date.now()/1000) }; }
 
 async function initDb() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS device_tokens (
+    token TEXT PRIMARY KEY,
+    device_uuid TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
   await pool.query(`CREATE TABLE IF NOT EXISTS licenses (
     id BIGSERIAL PRIMARY KEY,
     license_key TEXT UNIQUE NOT NULL,
@@ -73,6 +79,83 @@ async function validateLicense({ licenseKey, device, packageId, appId }) {
   }
   return success(Number(l.expires_unix), Number(l.expires_unix) - now);
 }
+
+
+// Protocol used by the current PoloniumExternal IPA. The app first registers
+// {device_uuid}, then activates with a Bearer token and the license/device fields.
+function currentDeviceToken(req) {
+  const h = String(req.get('authorization') || '');
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : '';
+}
+function clientError(code, message) {
+  return { ok: false, error: code, code, message };
+}
+app.post('/api/device/register', async (req, res) => {
+  try {
+    const deviceUuid = String(req.body?.device_uuid || '').trim();
+    if (!deviceUuid || deviceUuid.length > 256) {
+      return res.status(400).json(clientError('validation_error', 'device_uuid_required'));
+    }
+    const token = crypto.randomBytes(32).toString('base64url');
+    await pool.query(`INSERT INTO device_tokens(token, device_uuid)
+      VALUES($1,$2)
+      ON CONFLICT(device_uuid) DO UPDATE SET token=EXCLUDED.token, updated_at=NOW()`, [token, deviceUuid]);
+    return res.status(200).json({ ok: true, token });
+  } catch (e) {
+    console.error('device/register failed:', e);
+    return res.status(500).json(clientError('maintenance', 'registration_unavailable'));
+  }
+});
+
+app.post('/api/device/activate', async (req, res) => {
+  try {
+    const token = currentDeviceToken(req);
+    if (!token) return res.status(401).json(clientError('validation_error', 'token_required'));
+    const deviceResult = await pool.query('SELECT device_uuid FROM device_tokens WHERE token=$1 LIMIT 1', [token]);
+    if (!deviceResult.rows.length) return res.status(401).json(clientError('validation_error', 'token_invalid'));
+    const deviceUuid = String(deviceResult.rows[0].device_uuid);
+    const licenseKey = String(req.body?.license_key || '').trim().toUpperCase();
+    if (!licenseKey) return res.status(200).json(clientError('not_found', 'license_key_required'));
+
+    const licenseResult = await pool.query('SELECT * FROM licenses WHERE license_key=$1 LIMIT 1', [licenseKey]);
+    if (!licenseResult.rows.length) return res.status(200).json(clientError('not_found', 'license_not_found'));
+    const license = licenseResult.rows[0];
+    if (license.banned) return res.status(200).json(clientError('banned', 'license_banned'));
+    const now = Math.floor(Date.now() / 1000);
+    const expires = Number(license.expires_unix);
+    if (!Number.isFinite(expires) || expires <= now) return res.status(200).json(clientError('expired', 'license_expired'));
+    if (license.bound_device && String(license.bound_device) !== deviceUuid) {
+      return res.status(200).json(clientError('other_device', 'license_bound_to_another_device'));
+    }
+    if (!license.bound_device) {
+      await pool.query('UPDATE licenses SET bound_device=$1, updated_at=NOW() WHERE id=$2', [deviceUuid, license.id]);
+    }
+    return res.status(200).json({ ok: true, expires_unix: expires, seconds_left: Math.max(0, expires - now) });
+  } catch (e) {
+    console.error('device/activate failed:', e);
+    return res.status(200).json(clientError('maintenance', 'activation_unavailable'));
+  }
+});
+
+// The IPA expects these four top-level fields when loading the mod catalogue.
+// Actual mod assets/URLs can be added here without changing the license protocol.
+app.get('/api/device/mods/:gameKey', async (req, res) => {
+  try {
+    const token = currentDeviceToken(req);
+    if (!token) return res.status(401).json(clientError('validation_error', 'token_required'));
+    const r = await pool.query('SELECT device_uuid FROM device_tokens WHERE token=$1 LIMIT 1', [token]);
+    if (!r.rows.length) return res.status(401).json(clientError('validation_error', 'token_invalid'));
+    const gameKey = String(req.params.gameKey || '');
+    if (!['ffth', 'ffmax'].includes(gameKey)) {
+      return res.status(200).json(clientError('validation_error', 'unknown_game'));
+    }
+    return res.json({ aim: {}, visual: {}, chams_file: '', chams_json: {} });
+  } catch (e) {
+    console.error('device/mods failed:', e);
+    return res.status(503).json(clientError('maintenance', 'catalogue_unavailable'));
+  }
+});
 
 app.get('/', (_req, res) => res.json({ ok: true, service: 'External Auth', protocol: 'external-license-v1' }));
 app.get('/health', async (_req,res) => { try { await pool.query('SELECT 1'); res.json({ok:true}); } catch(e) { res.status(503).json({ok:false}); } });

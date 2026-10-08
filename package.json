@@ -1,9 +1,16 @@
 {
-  "name": "external-auth-server",
-  "version": "1.0.0",
+  "name": "externalfeo-render-compatible",
+  "version": "1.1.0",
   "private": true,
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "engines": { "node": ">=20" },
-  "dependencies": { "express": "^4.21.2", "pg": "^8.13.1" }
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
 }

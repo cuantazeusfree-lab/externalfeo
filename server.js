@@ -7,6 +7,19 @@ const app = express();
 app.use(express.json({ limit: '64kb' }));
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 
+// Request diagnostics for Render. Never log request bodies, license keys, or auth tokens.
+app.use((req, res, next) => {
+  const started = Date.now();
+  res.on('finish', () => {
+    console.log(JSON.stringify({
+      type: 'http_request', method: req.method, path: req.path,
+      status: res.statusCode, duration_ms: Date.now() - started,
+      content_type: req.get('content-type') || null
+    }));
+  });
+  next();
+});
+
 const PORT = process.env.PORT || 10000;
 const APP_ID = process.env.APP_ID || 'external.com';
 const PACKAGE_ID = process.env.PACKAGE_ID || 'External';
@@ -150,7 +163,15 @@ app.get('/api/device/mods/:gameKey', async (req, res) => {
     if (!['ffth', 'ffmax'].includes(gameKey)) {
       return res.status(200).json(clientError('validation_error', 'unknown_game'));
     }
-    return res.json({ aim: {}, visual: {}, chams_file: '', chams_json: {} });
+    // MOD_CATALOG_JSON may define real catalogue objects per game. Files must exist under downloads/.
+    let catalog = {};
+    try { catalog = JSON.parse(process.env.MOD_CATALOG_JSON || '{}'); } catch (_) {
+      console.error('MOD_CATALOG_JSON is invalid JSON');
+    }
+    const selected = catalog[gameKey];
+    return res.json(selected && typeof selected === 'object'
+      ? selected
+      : { aim: {}, visual: {}, chams_file: '', chams_json: {} });
   } catch (e) {
     console.error('device/mods failed:', e);
     return res.status(503).json(clientError('maintenance', 'catalogue_unavailable'));
@@ -217,6 +238,53 @@ const licenseHandler = async (req, res) => {
 app.post('/external/api/server.php', licenseHandler);
 app.post('/a1234567', licenseHandler);
 
+// Download delivery: serve local files from ./downloads first; optionally proxy to a trusted legacy host.
+const path = require('path');
+const fs = require('fs');
+const DOWNLOAD_DIR = path.resolve(__dirname, 'downloads');
+const DOWNLOAD_ORIGIN = String(process.env.DOWNLOAD_ORIGIN || '').trim().replace(/\/$/, '');
+function safeDownloadPath(urlPath) {
+  let decoded;
+  try { decoded = decodeURIComponent(urlPath || ''); } catch (_) { return null; }
+  const relative = decoded.replace(/^\/+/, '');
+  if (!relative || relative.includes('\\0') || relative.split(/[\\/]/).some(p => p === '..')) return null;
+  const absolute = path.resolve(DOWNLOAD_DIR, relative);
+  if (absolute !== DOWNLOAD_DIR && !absolute.startsWith(DOWNLOAD_DIR + path.sep)) return null;
+  return absolute;
+}
+async function downloadProxy(req, res) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(405).json({ ok:false, error:'method_not_allowed' });
+  const rawPath = req.path.replace(/^\/api\/download\/?/, '').replace(/^\/download\/?/, '');
+  const localFile = safeDownloadPath(rawPath);
+  if (!localFile) return res.status(400).json({ ok:false, error:'invalid_download_path' });
+  const stat = await fs.promises.stat(localFile).catch(() => null);
+  if (stat && stat.isFile()) {
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.sendFile(localFile, { dotfiles:'deny' }, err => {
+      if (err && !res.headersSent) res.status(err.statusCode || 500).json({ ok:false, error:'download_failed' });
+    });
+  }
+  if (!DOWNLOAD_ORIGIN) return res.status(404).json({ ok:false, error:'download_file_not_found', message:'Add the real file to downloads/ using the requested relative path.' });
+  try {
+    const suffix = req.originalUrl.replace(/^\/api\/download/, '').replace(/^\/download/, '');
+    const target = new URL(suffix || '/', DOWNLOAD_ORIGIN);
+    const upstream = await fetch(target, { method:req.method, headers:{ accept:req.get('accept') || '*/*', 'user-agent':'ExternalFEO-Download-Proxy/1.0' }, redirect:'manual', signal:AbortSignal.timeout(30000) });
+    res.status(upstream.status);
+    for (const name of ['content-type','content-length','content-disposition','cache-control','last-modified','etag','accept-ranges','location']) {
+      const value = upstream.headers.get(name); if (value) res.set(name, value);
+    }
+    if (req.method === 'HEAD' || !upstream.body) return res.end();
+    const reader = upstream.body.getReader();
+    try { while (true) { const {done,value}=await reader.read(); if(done) break; if(!res.write(Buffer.from(value))) await new Promise(resolve=>res.once('drain',resolve)); } res.end(); }
+    finally { reader.releaseLock(); }
+  } catch(e) { console.error('download proxy failed:',e.message); if(!res.headersSent) res.status(502).json({ok:false,error:'download_upstream_unavailable'}); else res.end(); }
+}
+app.all('/api/download', downloadProxy);
+app.all('/api/download/*', downloadProxy);
+app.all('/download', downloadProxy);
+app.all('/download/*', downloadProxy);
+
 function admin(req,res,next){
   const authorization = String(req.get('authorization') || '').trim();
   if (!ADMIN_TOKEN || authorization !== `Bearer ${ADMIN_TOKEN}`) return res.status(401).json({error:'unauthorized'});
@@ -269,6 +337,12 @@ app.post('/admin/generate-key', async (req,res)=>{
     console.error(e);
     res.status(500).json({error:'could_not_generate_key'});
   }
+});
+
+// Unknown paths are made explicit in Render logs so the actual IPA route can be identified.
+app.use((req, res) => {
+  console.warn(JSON.stringify({ type: 'unhandled_route', method: req.method, path: req.path }));
+  res.status(404).json({ ok: false, error: 'route_not_found', method: req.method, path: req.path });
 });
 
 initDb().then(()=>app.listen(PORT,()=>console.log(`External Auth listening on ${PORT}`))).catch(e=>{ console.error(e); process.exit(1); });

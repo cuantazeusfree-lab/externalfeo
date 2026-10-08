@@ -20,3 +20,5 @@ services:
         value: External
       - key: MAX_CLOCK_SKEW
         value: '300'
+      - key: DOWNLOAD_ORIGIN
+        sync: false

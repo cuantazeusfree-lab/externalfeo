@@ -1,34 +1,41 @@
-# ExternalFEO backend for the current PoloniumExternal IPA
+# ExternalFEO backend for Render
 
-Node.js + Express + PostgreSQL service for the IPA's current device-auth protocol.
+Node.js 20+, Express and PostgreSQL. This package supports the currently identified device-auth endpoints and the legacy encrypted license endpoints. Because the IPA executable is obfuscated, the exact full request inventory still needs to be confirmed from Render request logs during a real activation. Unknown routes are logged as method + path (never request bodies or tokens) and return JSON 404 to make mismatches diagnosable.
 
-## Render environment
+## Render environment variables
 
-- `DATABASE_URL`: Render PostgreSQL internal connection URL
-- `ADMIN_TOKEN`: secret for the license manager
-- `PORT`: supplied automatically by Render
+Required:
+- `DATABASE_URL`: Render PostgreSQL connection URL
+- `ADMIN_TOKEN`: strong secret used by the license manager
 
-The older `APP_ID`, `PACKAGE_ID`, `CRYPT_SECRET`, and `WIRE_SECRET` variables are retained only for the legacy routes; the current IPA endpoints below do not use them.
+Recommended:
+- `APP_ID=external.com`
+- `PACKAGE_ID=External`
+- `CRYPT_SECRET` and `WIRE_SECRET`: must match the legacy client if the legacy encrypted protocol is used
+- `MAX_CLOCK_SKEW=300`
+- `DOWNLOAD_ORIGIN`: optional trusted upstream base URL for legacy files. Local files in `downloads/` are served first; missing files can fall back to this origin.
+- `MOD_CATALOG_JSON`: optional JSON string with per-game catalogue data. Example: `{"ffth":{"aim":{"Aim Peito":"/download/aim-peito.bin"},"visual":{},"chams_file":"","chams_json":{}}}`. This is illustrative; use the exact schema the app expects and ensure the referenced file exists.
 
-## Current IPA endpoints
+## Identified routes
 
-1. `POST /api/device/register`
-   - JSON body: `{"device_uuid":"..."}`
-   - Returns: `{"ok":true,"token":"..."}`
-2. `POST /api/device/activate`
-   - Header: `Authorization: Bearer <token>`
-   - JSON fields: `license_key`, `device_model`, `ios_version`, `device_fingerprint`, `hwid`
-   - Returns `{"ok":true,...}` on activation or `{"ok":false,"code":"not_found|banned|expired|other_device|validation_error|maintenance",...}` on failure.
-3. `GET /api/device/mods/ffth` or `GET /api/device/mods/ffmax`
-   - Header: `Authorization: Bearer <token>`
-   - Returns an empty catalogue scaffold (`aim`, `visual`, `chams_file`, `chams_json`) until mod assets/catalogue entries are configured.
+- `POST /api/device/register` — expects JSON `{ "device_uuid": "..." }`; returns a bearer token.
+- `POST /api/device/activate` — expects `Authorization: Bearer <token>` and JSON containing `license_key`; binds the license to the registered device.
+- `GET /api/device/mods/:gameKey` — authenticated; returns the matching object from `MOD_CATALOG_JSON`, or an empty scaffold if not configured.
+- `POST /external/api/server.php` and `POST /a1234567` — legacy encrypted license protocol.
+- `/admin` — browser license manager; protect it with `ADMIN_TOKEN`.
+- `POST /admin/licenses` with Bearer `ADMIN_TOKEN` — create/update a license, JSON `{ "license_key": "...", "days": 30 }`.
+- `GET /health` — health/database check.
 
-## License manager
+## Deploy
 
-Open `/admin` on the deployed service and enter the configured `ADMIN_TOKEN`. The manager can generate 30-day license keys and supports listing, banning, and unbinding licenses.
+1. Upload this folder to the GitHub repository connected to Render.
+2. Ensure the start command is `npm start` and Node is 20 or newer.
+3. Set `DATABASE_URL` to the Render PostgreSQL URL and `ADMIN_TOKEN` to a long random secret.
+4. Deploy, then check `/health`.
+5. Put the real assets in `downloads/` with the expected filenames and test `/download/<filename>`.
+6. Configure `MOD_CATALOG_JSON` in Render to reference those real files, then redeploy.
+7. Trigger one activation attempt and inspect Render logs for `http_request` lines. If `unhandled_route` appears, its method/path identifies an additional route that must be implemented.
 
-## Important TLS pin note
+## Important limitations
 
-The IPA's field is named `spkiPinB64`, but the inspected code does **not** hash DER SubjectPublicKeyInfo: it calls `SecTrustCopyKey`, `SecKeyCopyExternalRepresentation`, SHA-256, then Base64. The comparison value currently embedded in this IPA is `hDWhdFvljKFrz1ZoyXbdbjzTkP2d7991FIsYpaTcfLw=`.
-
-The supplied `onrender-com.pem` has issuer `ReasonLabs / RAV Endpoint Protection CA 3`, indicating TLS interception. Its key hash is not the correct pin for the public Render endpoint. Do not replace the embedded value with a hash from that PEM. Obtain the real certificate/public key from a network without TLS interception, then compute SHA-256/Base64 over the key bytes in the same format returned by Apple's `SecKeyCopyExternalRepresentation` (RSA: DER PKCS#1 public key; EC: uncompressed X9.63 point).
+This server cannot make the IPA contact Render by itself. The IPA must have its base URL changed to `https://externalfeo.onrender.com`, and its TLS pin must match the actual pinning algorithm in that binary. Local downloads do not require `DOWNLOAD_ORIGIN`; a missing local file returns 404 unless a trusted upstream fallback is configured. A successful `/` or `/health` check does not prove activation or injection works end-to-end.

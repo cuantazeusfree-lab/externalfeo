@@ -267,8 +267,9 @@ async function downloadProxy(req, res) {
   }
   if (!DOWNLOAD_ORIGIN) return res.status(404).json({ ok:false, error:'download_file_not_found', message:'Add the real file to downloads/ using the requested relative path.' });
   try {
-    const suffix = req.originalUrl.replace(/^\/api\/download/, '').replace(/^\/download/, '');
-    const target = new URL(suffix || '/', DOWNLOAD_ORIGIN);
+    // Preserve the incoming path and query when forwarding to the upstream host.
+    // DOWNLOAD_ORIGIN should be the upstream origin/base URL, not a route-specific endpoint.
+    const target = new URL(req.originalUrl, DOWNLOAD_ORIGIN);
     const upstream = await fetch(target, { method:req.method, headers:{ accept:req.get('accept') || '*/*', 'user-agent':'ExternalFEO-Download-Proxy/1.0' }, redirect:'manual', signal:AbortSignal.timeout(30000) });
     res.status(upstream.status);
     for (const name of ['content-type','content-length','content-disposition','cache-control','last-modified','etag','accept-ranges','location']) {

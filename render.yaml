@@ -1,24 +1,28 @@
 services:
   - type: web
-    name: externalfeo
-    runtime: node
-    plan: free
-    buildCommand: npm install
-    startCommand: npm start
+    name: externalfeo-auth
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
+        fromDatabase:
+          name: externalfeo-db
+          property: connectionString
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
         sync: false
       - key: ADMIN_TOKEN
         sync: false
-      - key: CRYPT_SECRET
-        value: Fluck2020@Zexis
-      - key: WIRE_SECRET
-        value: '@IamGayBecauseYouAreSexy'
-      - key: APP_ID
-        value: external.com
-      - key: PACKAGE_ID
-        value: External
-      - key: MAX_CLOCK_SKEW
-        value: '300'
-      - key: DOWNLOAD_ORIGIN
-        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DEVICE_HASH_SECRET
+        generateValue: true
+databases:
+  - name: externalfeo-db
+    plan: basic-256mb
+    databaseName: externalfeo
+    user: externalfeo

@@ -50,11 +50,12 @@ class GenerateRequest(BaseModel):
 
 app = FastAPI(title="ExternalFEO License Auth", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "*").split(","), allow_credentials=False, allow_methods=["GET","POST"], allow_headers=["Content-Type","X-Admin-Token","Authorization"])
-serializer = URLSafeTimedSerializer(os.getenv("SESSION_SECRET", "CHANGE_ME_SESSION_SECRET"))
+SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
-DEVICE_PEPPER = os.getenv("DEVICE_HASH_SECRET", "CHANGE_ME_DEVICE_HASH_SECRET")
+DEVICE_PEPPER = os.getenv("DEVICE_HASH_SECRET", "")
+serializer = URLSafeTimedSerializer(SESSION_SECRET or "startup-will-refuse-to-run")
 
 def db_session():
     db = SessionLocal()
@@ -75,6 +76,9 @@ def new_key() -> str:
 def status_for(lic, device_id=None):
     if lic.revoked: return "revoked"
     if lic.activated_at is None: return "new"
+    # Defensive handling for legacy/incomplete rows: an activated license
+    # without an expiry must not crash the API or be treated as valid.
+    if lic.expires_at is None: return "expired"
     if aware(lic.expires_at) <= utcnow(): return "expired"
     if device_id is not None and not hmac.compare_digest(lic.device_hash or "", hash_device(device_id)):
         return "device_mismatch"
@@ -106,9 +110,25 @@ def admin_page(request: Request):
 
 @app.on_event("startup")
 def startup():
+    # Fail closed: do not run with known/default or missing production secrets.
+    required = {
+        "ADMIN_PASSWORD": ADMIN_PASSWORD,
+        "ADMIN_TOKEN": ADMIN_TOKEN,
+        "SESSION_SECRET": SESSION_SECRET,
+        "DEVICE_HASH_SECRET": DEVICE_PEPPER,
+    }
+    missing = [name for name, value in required.items() if not value or value.startswith("CHANGE_ME")]
+    if missing:
+        raise RuntimeError(
+            "Missing or insecure required environment variables: "
+            + ", ".join(missing)
+            + ". Configure unique, high-entropy values in the deployment environment."
+        )
+    if len(SESSION_SECRET) < 32 or len(DEVICE_PEPPER) < 32 or len(ADMIN_TOKEN) < 32:
+        raise RuntimeError(
+            "SESSION_SECRET, DEVICE_HASH_SECRET, and ADMIN_TOKEN must each be at least 32 characters."
+        )
     Base.metadata.create_all(engine)
-    if not ADMIN_PASSWORD:
-        print("WARNING: ADMIN_PASSWORD is not set. Configure it in Render environment variables.")
 
 @app.get("/health")
 def health():

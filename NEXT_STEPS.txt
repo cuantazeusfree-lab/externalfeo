@@ -1,0 +1,17 @@
+ESTADO DE INTEGRACIÓN
+
+1. Este paquete endurece el backend de licencias existente.
+2. Rutas genéricas disponibles:
+   - GET /health
+   - POST /api/licenses/activate
+   - POST /api/licenses/validate
+3. La IPA incluye rutas de otro protocolo, entre ellas:
+   - /api/client/security-v3/challenge/
+   - /api/client/security-v3/grant/
+   - /api/ios/device-enrollment/start/
+   - /api/ios/device-enrollment/claim/
+   - /api/ios/device-enrollment/status/
+4. No se han implementado endpoints falsos ni se ha desactivado la comprobación
+   de firmas. Antes de implementar el protocolo del cliente se debe determinar
+   su contrato completo; solo con nombres de rutas y cadenas binarias no basta.
+5. La IPA original no ha sido modificada.

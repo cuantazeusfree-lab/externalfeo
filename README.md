@@ -52,3 +52,24 @@ curl -X POST http://127.0.0.1:8000/api/licenses/activate \
 
 ## Importante sobre compatibilidad con la IPA
 Este repositorio implementa un contrato de licencias nuevo y documentado; **no demuestra compatibilidad 100% con una IPA ya compilada**. Para hacer que una app existente lo consuma, hace falta identificar y adaptar los contratos reales del cliente (paths, nombres de campos, códigos HTTP, respuestas y, si corresponde, firma/nonce). No debe cambiarse el servidor para emular mecanismos de exploit o eludir controles de seguridad. La activación aquí es un esquema genérico de licencia; el `device_id` debe proceder de un identificador que la app esté autorizada a usar.
+
+
+## Cambios de endurecimiento de esta versión
+
+- El servidor ahora se niega a iniciar si faltan `ADMIN_PASSWORD`, `ADMIN_TOKEN`,
+  `SESSION_SECRET` o `DEVICE_HASH_SECRET`, o si se usan valores `CHANGE_ME`.
+- `SESSION_SECRET`, `DEVICE_HASH_SECRET` y `ADMIN_TOKEN` deben tener al menos
+  32 caracteres.
+- Las licencias activadas con `expires_at` ausente se tratan como expiradas,
+  evitando un error interno y evitando aceptarlas accidentalmente.
+- No se añadieron rutas inventadas para imitar el protocolo de la IPA. Las rutas
+  de `security-v3/challenge` y `security-v3/grant` requieren un contrato real
+  de solicitud/respuesta y una verificación criptográfica compatible antes de
+  implementarse.
+
+### Antes de desplegar
+Configura en Render los cuatro secretos indicados. Usa valores únicos y aleatorios;
+no reutilices `ADMIN_TOKEN` en la aplicación iOS ni incluyas secretos de servidor
+en la IPA. Después de desplegar, verifica `/health` y prueba activar y validar
+licencias con las rutas documentadas `/api/licenses/activate` y
+`/api/licenses/validate`.
